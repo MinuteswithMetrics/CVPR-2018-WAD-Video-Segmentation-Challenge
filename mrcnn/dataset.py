@@ -1,141 +1,104 @@
 from mrcnn import utils
 import numpy as np
-
-from pycocotools.coco import COCO
-from pycocotools.cocoeval import COCOeval
-from pycocotools import mask as maskUtils
-
 import os
 
-class BuildingsDataset(utils.Dataset):
-    def load_dataset(self, dataset_dir, load_small=False, return_coco=True):
-        """ Loads dataset released for the crowdAI Mapping Challenge(https://www.crowdai.org/challenges/mapping-challenge)
-            Params:
-                - dataset_dir : root directory of the dataset (can point to the train/val folder)
-                - load_small : Boolean value which signals if the annotations for all the images need to be loaded into the memory,
-                               or if only a small subset of the same should be loaded into memory
+
+class CVPRDataset(utils.Dataset):
+    def load_examples(self, images_dir, labels_dir, example_ids, class_dict):
         """
-        self.load_small = load_small
-        if self.load_small:
-            annotation_path = os.path.join(dataset_dir, "annotation-small.json")
-        else:
-            annotation_path = os.path.join(dataset_dir, "annotation.json")
-
-        image_dir = os.path.join(dataset_dir, "images")
-        print("Annotation Path ", annotation_path)
-        print("Image Dir ", image_dir)
-        assert os.path.exists(annotation_path) and os.path.exists(image_dir)
-
-        self.coco = COCO(annotation_path)
-        self.image_dir = image_dir
-
-        # Load all classes (Only Building in this version)
-        classIds = self.coco.getCatIds()
-
-        # Load all images
-        image_ids = list(self.coco.imgs.keys())
-
-        # register classes
-        for _class_id in classIds:
-            self.add_class("crowdai-mapping-challenge", _class_id, self.coco.loadCats(_class_id)[0]["name"])
-
-        # Register Images
-        for _img_id in image_ids:
-            assert(os.path.exists(os.path.join(image_dir, self.coco.imgs[_img_id]['file_name'])))
-            self.add_image(
-                "crowdai-mapping-challenge", image_id=_img_id,
-                path=os.path.join(image_dir, self.coco.imgs[_img_id]['file_name']),
-                width=self.coco.imgs[_img_id]["width"],
-                height=self.coco.imgs[_img_id]["height"],
-                annotations=self.coco.loadAnns(self.coco.getAnnIds(
-                                            imgIds=[_img_id],
-                                            catIds=classIds,
-                                            iscrowd=None)))
-
-        if return_coco:
-            return self.coco
-
+        Fills out self.class_info list with corresponding dictionaries
+        for each mask.
+        Fills out self.image_info list with corresponding dictionaries
+        for each image in "images_dir".
+        """
+        # Add Classes
+        self.class_info[0]["source"] = "CVPR_Dataset"
+        class_ids = list(class_dict.keys())
+        class_names = list(class_dict.values())    
+        for i in range(len(class_ids)):
+            self.add_class("CVPR_Dataset", class_ids[i], class_names[i])
+        
+        # Add Images
+        #image_ids = os.listdir(images_dir)
+        for example_id in example_ids:
+            image_id = example_id + ".jpg"
+            
+            # derive example_id, image_path, mask_path from image_id and directories
+            #example_id = image_id[:-4]
+            image_path = os.path.join(images_dir, image_id)
+            mask_path = os.path.join(labels_dir, example_id + '_instanceIds.png')
+            
+            # add image info
+            self.add_image("CVPR_Dataset", image_id = example_id, path = image_path,
+                           mask_path = mask_path)
+        print(len(example_ids))
+        pass
+    
+    def load_image(self, image_id):
+        """
+        Load the specified image and return a [H,W,3] Numpy array.
+        
+        Arguments:
+        image_id -- the datasets internal image id
+        """
+        # Load image
+        image = skimage.io.imread(self.image_info[image_id]['path'])
+        # If grayscale. Convert to RGB for consistency.
+        if image.ndim != 3:
+            image = skimage.color.gray2rgb(image)
+        # If has an alpha channel, remove it for consistency
+        if image.shape[-1] == 4:
+            image = image[..., :3]
+        return image
+    
     def load_mask(self, image_id):
-        """ Loads instance mask for a given image
-              This function converts mask from the coco format to a
-              a bitmap [height, width, instance]
-            Params:
-                - image_id : reference id for a given image
-
-            Returns:
-                masks : A bool array of shape [height, width, instances] with
-                    one mask per instance
-                class_ids : a 1D array of classIds of the corresponding instance masks
-                    (In this version of the challenge it will be of shape [instances] and always be filled with the class-id of the "Building" class.)
         """
-
-        image_info = self.image_info[image_id]
-        assert image_info["source"] == "crowdai-mapping-challenge"
-
-        instance_masks = []
-        class_ids = []
-        annotations = self.image_info[image_id]["annotations"]
-        # Build mask of shape [height, width, instance_count] and list
-        # of class IDs that correspond to each channel of the mask.
-        for annotation in annotations:
-            class_id = self.map_source_class_id(
-                "crowdai-mapping-challenge.{}".format(annotation['category_id']))
-            if class_id:
-                m = self.annToMask(annotation,  image_info["height"],
-                                                image_info["width"])
-                # Some objects are so small that they're less than 1 pixel area
-                # and end up rounded out. Skip those objects.
-                if m.max() < 1:
-                    continue
-
-                # Ignore the notion of "is_crowd" as specified in the coco format
-                # as we donot have the said annotation in the current version of the dataset
-
-                instance_masks.append(m)
-                class_ids.append(class_id)
-        # Pack instance masks into an array
-        if class_ids:
-            mask = np.stack(instance_masks, axis=2)
-            class_ids = np.array(class_ids, dtype=np.int32)
-            return mask, class_ids
-        else:
-            # Call super class to return an empty mask
-            return super(MappingChallengeDataset, self).load_mask(image_id)
-
-
-    def image_reference(self, image_id):
-        """Return a reference for a particular image
-
-            Ideally you this function is supposed to return a URL
-            but in this case, we will simply return the image_id
+        Arguments:
+        image_id -- the datasets internal image id
+        
+        Returns:
+        masks - A bool array of shape [height, width, instance count] with
+                a binary mask per instance.
+        class_ids - a 1D array of (internal) class IDs of the instance masks.
         """
-        return "crowdai-mapping-challenge::{}".format(image_id)
-    # The following two functions are from pycocotools with a few changes.
+        
+        info = self.image_info[image_id]
+        source = info["source"]
+        
+        # load the mask corresponding with image_id
+        cvpr_mask = skimage.io.imread(info['mask_path'])
+        
+        # compute instances, class_ids
+        instances = np.unique(cvpr_mask)
+        class_ids = np.array(instances / 1000, dtype = np.int16)
+        
+        # convert external class ids to internal. If not in self.class_ids, assign number higher than
+        # highest inetenal index
+        def external_to_internal_class_id(external_id, source):
+            try: class_id = self.class_from_source_map["{}.{}".format(source, str(external_id))]
+            except: class_id = self.num_classes + 1
+            return class_id
+        class_ids = np.array([external_to_internal_class_id(class_id, source) for class_id in class_ids])
+    
+        # filter out "0" (background) and any class_ids that are not in class_dict
+        inds = []
+        for i, class_id in enumerate(class_ids):
+            if class_id != 0 and class_id in self.class_ids:
+                inds.append(i) 
+        instances = instances[inds]
+        class_ids = class_ids[inds]
+        
+        # initialize boolean mask with 0 values and shape [Height, Width, instances]
+        mask = np.zeros((cvpr_mask.shape[0], cvpr_mask.shape[1], len(instances)))
+        
+        # loop through instances, insert each instance into third dimension of mask (mask[:, :, i])
+        for i, instance in enumerate(instances):
+            instance_mask = np.array(cvpr_mask == instance, dtype = np.uint8)
+            mask[:, :, i] = instance_mask
 
-    def annToRLE(self, ann, height, width):
-        """
-        Convert annotation which can be polygons, uncompressed RLE to RLE.
-        :return: binary mask (numpy 2D array)
-        """
-        segm = ann['segmentation']
-        if isinstance(segm, list):
-            # polygon -- a single object might consist of multiple parts
-            # we merge all parts into one mask rle code
-            rles = maskUtils.frPyObjects(segm, height, width)
-            rle = maskUtils.merge(rles)
-        elif isinstance(segm['counts'], list):
-            # uncompressed RLE
-            rle = maskUtils.frPyObjects(segm, height, width)
-        else:
-            # rle
-            rle = ann['segmentation']
-        return rle
+        #return mask, class_ids
+        return mask.astype(np.bool), class_ids.astype(np.int32)
 
-    def annToMask(self, ann, height, width):
-        """
-        Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
-        :return: binary mask (numpy 2D array)
-        """
-        rle = self.annToRLE(ann, height, width)
-        m = maskUtils.decode(rle)
-        return m
+
+
+
