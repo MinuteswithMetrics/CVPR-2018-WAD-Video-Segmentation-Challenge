@@ -31,6 +31,10 @@ from distutils.version import LooseVersion
 assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
 assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 
+from mrcnn.backbone import resnext
+from mrcnn.backbone import vgg16
+from mrcnn.backbone import densenet121
+from mrcnn.backbone import unet
 
 ############################################################
 #  Utility Functions
